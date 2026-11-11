@@ -1,28 +1,168 @@
+import os
 import tkinter as tk
-from tkinter import ttk, messagebox, Menu
+from collections import deque
+from pathlib import Path
+from tkinter import ttk
+
 from PIL import Image, ImageTk
+
+BASE_DIR = Path(__file__).resolve().parent
+ASSETS_DIR = BASE_DIR / "assets"
+
+# (значение действия, ключ перевода, файл иконки, колонка, строка)
+ACTIONS = [
+    (-3, "action_light", "light_hit.png", 0, 2),
+    (-6, "action_medium", "medium_hit.png", 1, 2),
+    (-9, "action_heavy", "heavy_hit.png", 0, 3),
+    (-15, "action_draw", "draw.png", 1, 3),
+    (2, "action_punch", "punch.png", 3, 2),
+    (7, "action_bend", "bend.png", 4, 2),
+    (13, "action_upset", "upset.png", 3, 3),
+    (16, "action_shrink", "shrink.png", 4, 3),
+]
+
+ACTION_KEY_BY_VALUE = {value: key for value, key, _, _, _ in ACTIONS}
+ICON_PATH_BY_VALUE = {
+    value: ASSETS_DIR / filename for value, _, filename, _, _ in ACTIONS
+}
+
+TRANSLATIONS = {
+    "en": {
+        "title": "TFC Anvil Helper",
+        "language": "Language:",
+        "tab_path": "Path",
+        "tab_end": "End",
+        "path_title": "Calculate the path",
+        "end_title": "Calculate the end coordinate",
+        "calculate": "Calculate",
+        "reset_queue": "Reset queue",
+        "reset": "Reset",
+        "error_invalid": "Error! Enter the end coordinate in the input field.",
+        "error_no_path": "Could not calculate the path.",
+        "end_coordinate": "End coordinate: {coord}",
+        "action_light": "Light Hit",
+        "action_medium": "Medium Hit",
+        "action_heavy": "Heavy Hit",
+        "action_draw": "Draw",
+        "action_punch": "Punch",
+        "action_bend": "Bend",
+        "action_upset": "Upset",
+        "action_shrink": "Shrink",
+        "tab_about": "About",
+        "about_text": """TFC Anvil Helper 2.0
+
+A helper for the anvil minigame in TerraFirmaCraft,
+a Minecraft mod by Robert "Bioxx" Anthony,
+Amanda "Kittychanley" Halek and others.
+
+Original author: dzhemvrot
+Interface enhancements: Taeko-ar
+English/Russian localization and improvements: CMDRillok
+
+License: GPL-3.0
+https://github.com/dzhemvrot/tfc_anvilhelper""",
+    },
+    "ru": {
+        "title": "Помощник наковальни TFC",
+        "language": "Язык:",
+        "tab_path": "Путь",
+        "tab_end": "Конец",
+        "path_title": "Расчёт пути",
+        "end_title": "Расчёт конечной координаты",
+        "calculate": "Рассчитать",
+        "reset_queue": "Сбросить очередь",
+        "reset": "Сброс",
+        "error_invalid": "Ошибка! Введите конечную координату в поле ввода.",
+        "error_no_path": "Не удалось рассчитать путь.",
+        "end_coordinate": "Конечная координата: {coord}",
+        "action_light": "Лёгкий удар",
+        "action_medium": "Средний удар",
+        "action_heavy": "Тяжёлый удар",
+        "action_draw": "Волочение",
+        "action_punch": "Пробивание",
+        "action_bend": "Сгибание",
+        "action_upset": "Осаживание",
+        "action_shrink": "Усадка",
+        "tab_about": "О программе",
+        "about_text": """Помощник наковальни TFC 2.0
+
+Помощник для мини-игры с наковальней в TerraFirmaCraft —
+моде для Minecraft от Robert "Bioxx" Anthony,
+Amanda "Kittychanley" Halek и других.
+
+Оригинальный автор: dzhemvrot
+Доработка интерфейса: Taeko-ar
+Английская/русская локализация и улучшения: CMDRillok
+
+Лицензия: GPL-3.0
+https://github.com/dzhemvrot/tfc_anvilhelper""",
+    },
+}
+
+LANGUAGE_NAMES = {"English": "en", "Русский": "ru"}
+LANGUAGE_BY_CODE = {code: name for name, code in LANGUAGE_NAMES.items()}
+
+LANG = os.environ.get("TFC_LANG", "en")
+if LANG not in TRANSLATIONS:
+    LANG = "en"
+BUTTON_ICON_SIZE = 44
+RESULT_ICON_SIZE = 30
+
+button_icons = {}
+result_icons = {}
 
 pbl = [0, 0, 0]
 pbl2 = []
-lstp = [2, 7, 13, 16]
-lstn = [-3, -6, -9, -15]
-newlst = []
 queued_images = []
-
-images = {
-    "Light Hit": "assets/light_hit.png",
-    "Medium Hit": "assets/medium_hit.png",
-    "Heavy Hit": "assets/heavy_hit.png",
-    "Draw": "assets/draw.png",
-    "Punch": "assets/punch.png",
-    "Bend": "assets/bend.png",
-    "Upset": "assets/upset.png",
-    "Shrink": "assets/shrink.png",
-}
+last_result = []
+result_message = None
+end_result = None
 
 
-def closest(lst, K):
-    return lst[min(range(len(lst)), key=lambda i: abs(lst[i] - K))]
+def t(key, **kwargs):
+    text = TRANSLATIONS[LANG].get(key, key)
+    return text.format(**kwargs) if kwargs else text
+
+
+def load_icon(value, size):
+    image = Image.open(ICON_PATH_BY_VALUE[value])
+    image = image.resize((size, size), Image.LANCZOS)
+    return ImageTk.PhotoImage(image)
+
+
+def find_path(target):
+    """Кратчайшая последовательность действий, дающая в сумме target."""
+    if target == 0:
+        return []
+
+    # Оптимальный путь не уходит далеко от цели: ограничиваем область поиска.
+    limit = abs(target) + 64
+    low, high = -limit, limit
+    previous = {0: None}
+    queue = deque([0])
+
+    while queue:
+        current = queue.popleft()
+        for value in ACTION_KEY_BY_VALUE:
+            nxt = current + value
+            if nxt in previous or not low <= nxt <= high:
+                continue
+            previous[nxt] = (current, value)
+            if nxt == target:
+                queue.clear()
+                break
+            queue.append(nxt)
+
+    if target not in previous:
+        return None
+
+    path = []
+    node = target
+    while previous[node] is not None:
+        node, value = previous[node]
+        path.append(value)
+    path.reverse()
+    return path
 
 
 def update_pbl(value):
@@ -33,32 +173,27 @@ def update_pbl(value):
 
 
 def update_pbl2(value):
-    global pbl2
+    global end_result
     pbl2.append(value)
+    end_result = None
     update_label2()
     add_image_to_queue(value)
 
 
 def update_label():
-    global pressedL
     pressedL.config(text=pbl)
 
 
 def update_label2():
-    global pressedL2
-    pressedL2.config(text=pbl2)
+    if end_result is None:
+        pressedL2.config(text=pbl2)
+    else:
+        pressedL2.config(text=t("end_coordinate", coord=end_result))
 
 
 def add_image_to_queue(value):
-    action_name = next(
-        (name for name, val in images.items() if val == value), None
-    )
-    if action_name and action_name in images:
-        img = ImageTk.PhotoImage(
-            Image.open(images[action_name]).resize((30, 30))
-        )
-        queued_images.append(img)
-        display_queue()
+    queued_images.append(result_icons[value])
+    display_queue()
 
 
 def display_queue():
@@ -79,59 +214,39 @@ def reset_queue():
 
 
 def reset_path():
-    global pbl, pbl2
+    global pbl, pbl2, end_result
     pbl = [0, 0, 0]
     pbl2 = []
+    end_result = None
     update_label()
     update_label2()
 
 
+def reset_pbl2():
+    global pbl2, end_result
+    pbl2 = []
+    end_result = None
+    update_label2()
+
+
 def clear_result():
+    global last_result, result_message
+    last_result = []
+    result_message = None
     for widget in result_frame.winfo_children():
         widget.destroy()
+    render_result_message()
 
 
-def calce():
-    global pbl2
-    global pressedL2
-    coord = sum(pbl2)
-    pressedL2.config(text=f"The end coordinate is {coord}")
+def render_result_message():
+    resultP.config(text=t(result_message) if result_message else "")
 
 
-def calculatepath():
-    global resultP
-    global pbl
-    global cente
-    newlst = []
-    a = pbl[2]
-    b = pbl[1]
-    c = pbl[0]
-    cn = cente.get()
-    try:
-        cn = int(cn)
-        bf = ((cn - a) - b) - c
-        fs = 0
-    except:
-        resultP.config(text="Error! Put end coordinate in the entrybox!")
+def render_result_icons():
+    for widget in result_frame.winfo_children():
+        widget.destroy()
+    if not last_result:
         return
-
-    while fs != bf:
-        x = bf - fs
-        if x > 0:
-            dif = closest(lstp, x)
-            fs += dif
-            newlst.append(dif)
-        if x < 0:
-            dif = closest(lstn, x)
-            fs += dif
-            newlst.append(dif)
-
-    newlst.append(c)
-    newlst.append(b)
-    newlst.append(a)
-
-    for widget in result_frame.winfo_children():
-        widget.destroy()
 
     result_frame.columnconfigure(0, weight=1)
     result_frame.rowconfigure(0, weight=1)
@@ -140,81 +255,127 @@ def calculatepath():
     container.grid(row=0, column=0, sticky="nsew")
     container.columnconfigure(0, weight=1)
 
-    for index, action in enumerate(newlst):
-        action_name = None
-        if action == 2:
-            action_name = "Punch"
-        elif action == 7:
-            action_name = "Bend"
-        elif action == 13:
-            action_name = "Upset"
-        elif action == 16:
-            action_name = "Shrink"
-        elif action == -3:
-            action_name = "Light Hit"
-        elif action == -6:
-            action_name = "Medium Hit"
-        elif action == -9:
-            action_name = "Heavy Hit"
-        elif action == -15:
-            action_name = "Draw"
-
-        if action_name in images:
-            img = ImageTk.PhotoImage(
-                Image.open(images[action_name]).resize((30, 30))
-            )
-            lbl = tk.Label(
-                container, text=action_name, compound=tk.TOP, image=img
-            )
-            lbl.image = img
-            lbl.grid(row=0, column=index, padx=5, sticky="w")
+    for index, action in enumerate(last_result):
+        img = result_icons[action]
+        lbl = tk.Label(
+            container, text=t(ACTION_KEY_BY_VALUE[action]), compound=tk.TOP, image=img
+        )
+        lbl.image = img
+        lbl.grid(row=0, column=index, padx=5, sticky="w")
 
 
-def about():
-    tk.messagebox.showinfo(
-        title="About",
-        message="""This is a program to help with anvil minigame in TerraFirmaCraft, a Minecraft mod made by Robert "Bioxx" Anthony, Amanda "Kittychanley" Halek, and others.
-
-Program author: dzhemvrot (enhanced by Taeko-ar)
-Program version: 2.0
-Program restributed using GPL-3.0 license""",
-    )
+def calce():
+    global end_result
+    end_result = sum(pbl2)
+    update_label2()
 
 
-def quitting():
-    root.destroy()
+def calculatepath():
+    global last_result, result_message
+    try:
+        target = int(cente.get())
+    except ValueError:
+        result_message = "error_invalid"
+        render_result_message()
+        return
+
+    a, b, c = pbl[2], pbl[1], pbl[0]
+    remainder = target - (a + b + c)
+    path = find_path(remainder)
+    if path is None:
+        result_message = "error_no_path"
+        render_result_message()
+        return
+
+    last_result = path + [a, b, c]
+    result_message = None
+    render_result_message()
+    render_result_icons()
+
+
+def build_action_buttons(parent, handler):
+    for value, _key, _filename, column, row in ACTIONS:
+        ttk.Button(
+            parent,
+            image=button_icons[value],
+            command=lambda v=value: handler(v),
+        ).grid(column=column, row=row, padx=6, pady=6)
+
+
+def apply_language():
+    root.title(t("title"))
+    tabControl.tab(tab1, text=t("tab_path"))
+    tabControl.tab(tab2, text=t("tab_end"))
+    tabControl.tab(tab3, text=t("tab_about"))
+    about_label.config(text=t("about_text"))
+    language_label.config(text=t("language"))
+    path_title.config(text=t("path_title"))
+    end_title.config(text=t("end_title"))
+    calculate_button.config(text=t("calculate"))
+    reset_queue_button.config(text=t("reset_queue"))
+    end_calculate_button.config(text=t("calculate"))
+    end_reset_button.config(text=t("reset"))
+    update_label()
+    update_label2()
+    render_result_message()
+    render_result_icons()
+
+
+def change_language(_event=None):
+    global LANG
+    LANG = LANGUAGE_NAMES.get(language_var.get(), "en")
+    apply_language()
 
 
 root = tk.Tk()
-root.title("Tab Widget")
-root.rowconfigure(0, weight=1)
+root.title(t("title"))
+root.minsize(560, 460)
+root.rowconfigure(1, weight=1)
 root.columnconfigure(0, weight=1)
 
+button_icons = {
+    value: load_icon(value, BUTTON_ICON_SIZE) for value in ACTION_KEY_BY_VALUE
+}
+result_icons = {
+    value: load_icon(value, RESULT_ICON_SIZE) for value in ACTION_KEY_BY_VALUE
+}
+
+header = ttk.Frame(root)
+header.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 0))
+header.columnconfigure(0, weight=1)
+
+language_label = ttk.Label(header, text=t("language"))
+language_label.grid(row=0, column=1, padx=(0, 6))
+
+language_var = tk.StringVar(value=LANGUAGE_BY_CODE[LANG])
+language_box = ttk.Combobox(
+    header,
+    textvariable=language_var,
+    values=list(LANGUAGE_NAMES),
+    state="readonly",
+    width=10,
+)
+language_box.grid(row=0, column=2, sticky="e")
+language_box.bind("<<ComboboxSelected>>", change_language)
+
 tabControl = ttk.Notebook(root)
-tabControl.grid(row=0, column=0, sticky="nsew")
+tabControl.grid(row=1, column=0, sticky="nsew", padx=0, pady=0)
 
 tab1 = ttk.Frame(tabControl)
 tab2 = ttk.Frame(tabControl)
+tab3 = ttk.Frame(tabControl)
 
-tabControl.add(tab1, text="Path")
-tabControl.add(tab2, text="End")
+tabControl.add(tab1, text=t("tab_path"))
+tabControl.add(tab2, text=t("tab_end"))
+tabControl.add(tab3, text=t("tab_about"))
 
 tab1.rowconfigure(0, weight=1)
 tab1.columnconfigure(0, weight=1)
 tab2.rowconfigure(0, weight=1)
 tab2.columnconfigure(0, weight=1)
 
-menubar = Menu(root)
-root.config(menu=menubar)
-
-file_menu = Menu(menubar, tearoff=0)
-file_menu.add_command(label="Exit", command=quitting)
-menubar.add_cascade(label="File", menu=file_menu)
-menubar.add_command(label="About", command=about)
-
-ttk.Label(tab1, text="Calculate the path").grid(
-    column=2, row=0, padx=30, pady=0
-)
+path_title = ttk.Label(tab1, text=t("path_title"))
+path_title.grid(column=2, row=0, padx=30, pady=0)
 pressedL = ttk.Label(tab1, text=pbl)
 pressedL.grid(column=2, row=1, padx=0, pady=0)
 
@@ -228,47 +389,21 @@ for i in range(5):
     tab1.columnconfigure(i, weight=1)
     tab1.rowconfigure(i, weight=1)
 
-ttk.Button(tab1, text="Light Hit", command=lambda: update_pbl(-3)).grid(
-    column=0, row=2, padx=10, pady=10
-)
-ttk.Button(tab1, text="Medium Hit", command=lambda: update_pbl(-6)).grid(
-    column=1, row=2, padx=10, pady=10
-)
-ttk.Button(tab1, text="Heavy Hit", command=lambda: update_pbl(-9)).grid(
-    column=0, row=3, padx=10, pady=10
-)
-ttk.Button(tab1, text="Draw", command=lambda: update_pbl(-15)).grid(
-    column=1, row=3, padx=10, pady=10
-)
-ttk.Button(tab1, text="Punch", command=lambda: update_pbl(2)).grid(
-    column=3, row=2, padx=10, pady=10
-)
-ttk.Button(tab1, text="Bend", command=lambda: update_pbl(7)).grid(
-    column=4, row=2, padx=10, pady=10
-)
-ttk.Button(tab1, text="Upset", command=lambda: update_pbl(13)).grid(
-    column=3, row=3, padx=10, pady=10
-)
-ttk.Button(tab1, text="Shrink", command=lambda: update_pbl(16)).grid(
-    column=4, row=3, padx=10, pady=10
-)
+build_action_buttons(tab1, update_pbl)
 
 cente = ttk.Entry(tab1)
 cente.grid(column=2, row=3)
-ttk.Button(tab1, text="Calculate", command=calculatepath).grid(
-    column=2, row=4, padx=10, pady=10
-)
-ttk.Button(tab1, text="Reset Queue", command=reset_queue).grid(
-    column=2, row=5, padx=10, pady=10
-)
+calculate_button = ttk.Button(tab1, text=t("calculate"), command=calculatepath)
+calculate_button.grid(column=2, row=4, padx=10, pady=10)
+reset_queue_button = ttk.Button(tab1, text=t("reset_queue"), command=reset_queue)
+reset_queue_button.grid(column=2, row=5, padx=10, pady=10)
 
 resultP = ttk.Label(tab1, text="")
 resultP.grid(column=2, row=7, padx=0, pady=0)
 
-# Tab 2 (End)
-ttk.Label(tab2, text="Calculate the end coordinate").grid(
-    column=2, row=0, padx=30, pady=0
-)
+# Вкладка 2 (Конец)
+end_title = ttk.Label(tab2, text=t("end_title"))
+end_title.grid(column=2, row=0, padx=30, pady=0)
 pressedL2 = ttk.Label(tab2, text="")
 pressedL2.grid(column=2, row=1, padx=0, pady=0)
 
@@ -276,36 +411,28 @@ tab2.columnconfigure(0, weight=1)
 tab2.rowconfigure(0, weight=1)
 tab2.columnconfigure(4, weight=1)
 
-ttk.Button(tab2, text="Light Hit", command=lambda: update_pbl2(-3)).grid(
-    column=0, row=2, padx=10, pady=10
-)
-ttk.Button(tab2, text="Medium Hit", command=lambda: update_pbl2(-6)).grid(
-    column=1, row=2, padx=10, pady=10
-)
-ttk.Button(tab2, text="Heavy Hit", command=lambda: update_pbl2(-9)).grid(
-    column=0, row=3, padx=10, pady=10
-)
-ttk.Button(tab2, text="Draw", command=lambda: update_pbl2(-15)).grid(
-    column=1, row=3, padx=10, pady=10
-)
-ttk.Button(tab2, text="Punch", command=lambda: update_pbl2(2)).grid(
-    column=3, row=2, padx=10, pady=10
-)
-ttk.Button(tab2, text="Bend", command=lambda: update_pbl2(7)).grid(
-    column=4, row=2, padx=10, pady=10
-)
-ttk.Button(tab2, text="Upset", command=lambda: update_pbl2(13)).grid(
-    column=3, row=3, padx=10, pady=10
-)
-ttk.Button(tab2, text="Shrink", command=lambda: update_pbl2(16)).grid(
-    column=4, row=3, padx=10, pady=10
-)
+build_action_buttons(tab2, update_pbl2)
 
-resetB = ttk.Button(tab2, text="Reset", command=lambda: reset_path()).grid(
-    column=2, row=5, padx=10, pady=10
-)
-calceB = ttk.Button(tab2, text="Calculate", command=calce).grid(
-    column=2, row=4, padx=10, pady=10
-)
+end_reset_button = ttk.Button(tab2, text=t("reset"), command=reset_pbl2)
+end_reset_button.grid(column=2, row=5, padx=10, pady=10)
+end_calculate_button = ttk.Button(tab2, text=t("calculate"), command=calce)
+end_calculate_button.grid(column=2, row=4, padx=10, pady=10)
 
+# Вкладка 3 (О программе)
+tab3.columnconfigure(0, weight=1)
+tab3.rowconfigure(0, weight=1)
+
+about_frame = ttk.Frame(tab3, padding=24)
+about_frame.grid(row=0, column=0, sticky="n")
+
+about_label = ttk.Label(
+    about_frame,
+    text=t("about_text"),
+    justify="left",
+    anchor="w",
+    font=("TkDefaultFont", 11),
+)
+about_label.grid(row=0, column=0, sticky="w")
+
+apply_language()
 root.mainloop()
